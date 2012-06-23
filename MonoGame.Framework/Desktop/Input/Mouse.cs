@@ -38,8 +38,15 @@ purpose and non-infringement.
 */
 #endregion License
 ﻿
-using MouseInfo = OpenTK.Input.Mouse;
 using System;
+
+#if WINRT
+using Windows.UI.Core;
+using Windows.UI.Xaml;
+using Windows.System;
+#else
+using MouseInfo = OpenTK.Input.Mouse;
+#endif
 
 namespace Microsoft.Xna.Framework.Input
 {
@@ -50,56 +57,131 @@ namespace Microsoft.Xna.Framework.Input
 	
 	public static class Mouse
 	{
-		private static OpenTK.Input.MouseDevice _mouse = null;
-		private static int _x, _y;
-		
-		internal static void UpdateMouseInfo(OpenTK.Input.MouseDevice mouse)
+#if !WINRT
+		private static OpenTK.Input.MouseDevice _mouse = null;			
+#endif
+
+#if WINRT
+        static internal CoreWindow Window;
+#elif WINDOWS
+        static OpenTK.GameWindow Window;
+        internal static void setWindows(OpenTK.GameWindow window)
+        {
+            Window = window;
+            _mouse = window.Mouse;        
+        }
+#else
+        private static int _x, _y;
+        internal static void UpdateMouseInfo(OpenTK.Input.MouseDevice mouse)
 		{
 			_mouse = mouse;
 			_mouse.Move += HandleWindowMouseMove;
 		}
-		
 
-		internal static void HandleWindowMouseMove (object sender, OpenTK.Input.MouseMoveEventArgs e)
+        internal static void HandleWindowMouseMove (object sender, OpenTK.Input.MouseMoveEventArgs e)
 		{
 			SetPosition(e.X, e.Y);
 		}
-		
-		#region Public interface		
-		
-		public static MouseState GetState ()
-		{	
-			// no multiple mouse supported (yet!)
-			//OpenTK.Input.MouseState mState = MouseInfo.GetState(0); // to be implemented on opentk 1.1
-			
-			//bool b = (bool)_mouse.GetType().GetProperty("Item").GetValue(OpenTK.Input.MouseButton.Left, null);
-			
+
+#endif
+        #region Public interface
+
+        public static MouseState GetState ()
+		{				
+#if !WINRT
 			// maybe someone is tring to get mouse before initialize
 			if (_mouse == null)
 			{
 				return new MouseState(0, 0);
 			}
-			
-			MouseState ms = new MouseState(_x, _y);
+#endif
+	
+#if WINRT
+            var pos = Window.PointerPosition;
 
-			ms.LeftButton = _mouse[OpenTK.Input.MouseButton.Left] ? ButtonState.Pressed : ButtonState.Released;
+            // TODO: Probably the wrong way to convert to pixels!
+            var ms = new MouseState((int)pos.X, (int)pos.Y);
+
+#elif WINDOWS                
+            //MouseState ms = new MouseState(Window.Mouse.X, Window.Mouse.Y);
+            POINT p = new POINT();
+            GetCursorPos(out p);
+            System.Drawing.Point pc = Window.PointToClient(p.ToPoint());
+            MouseState ms = new MouseState(pc.X, pc.Y);
+#else
+            MouseState ms = new MouseState(_x, _y);
+#endif   
+    
+#if WINRT
+            ms.LeftButton = Window.GetAsyncKeyState(VirtualKey.LeftButton) == CoreVirtualKeyStates.Down ? ButtonState.Pressed : ButtonState.Released;
+            ms.RightButton = Window.GetAsyncKeyState(VirtualKey.RightButton) == CoreVirtualKeyStates.Down ? ButtonState.Pressed : ButtonState.Released;
+            ms.MiddleButton = Window.GetAsyncKeyState(VirtualKey.MiddleButton) == CoreVirtualKeyStates.Down ? ButtonState.Pressed : ButtonState.Released;
+            ms.ScrollWheelValue = 0; // TODO: How do i get the scroll wheel state?
+#else
+            ms.LeftButton = _mouse[OpenTK.Input.MouseButton.Left] ? ButtonState.Pressed : ButtonState.Released;
 			ms.RightButton = _mouse[OpenTK.Input.MouseButton.Right] ? ButtonState.Pressed : ButtonState.Released;
 			ms.MiddleButton = _mouse[OpenTK.Input.MouseButton.Middle] ? ButtonState.Pressed : ButtonState.Released;;
 			ms.ScrollWheelValue = _mouse.Wheel;
-			
-			
+#endif			
+
 			return ms;
 		}
 
+#if WINRT
+        public static void SetPosition(int x, int y)
+        {
+            // TODO: How do i do this in WinRT... i can't right?
+        }   
+#elif WINDOWS
+        public static void SetPosition(int x, int y)
+        {
+            ///correcting the coordinate system
+            ///Only way to set the mouse position !!!
+            System.Drawing.Point pt = Window.PointToScreen(new System.Drawing.Point(x, y));
+            SetCursorPos(pt.X, pt.Y);
+        }       
+#else
 		public static void SetPosition (int x, int y)
 		{
 			// TODO propagate change to opentk mouse object (requires opentk 1.1)
 			//throw new NotImplementedException("Feature not implemented.");
 			_x = x;
 			_y = y;
-		}
-		
-		#endregion
-	}
+        }
+
+#endif
+
+#if !WINRT && WINDOWS
+        [System.Runtime.InteropServices.DllImportAttribute("user32.dll", EntryPoint = "SetCursorPos")]
+        [return: System.Runtime.InteropServices.MarshalAsAttribute(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        public static extern bool SetCursorPos(int X, int Y);
+
+        /// <summary>
+        /// Struct representing a point.
+        /// </summary>
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        public struct POINT
+        {
+            public int X;
+            public int Y;
+
+            public System.Drawing.Point ToPoint()
+            {
+                return new System.Drawing.Point(X, Y);
+            }
+
+        }
+
+        /// <summary>
+        /// Retrieves the cursor's position, in screen coordinates.
+        /// </summary>
+        /// <see>See MSDN documentation for further information.</see>
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        public static extern bool GetCursorPos(out POINT lpPoint);
+      
+#endif
+
+        #endregion
+    }
 }
 

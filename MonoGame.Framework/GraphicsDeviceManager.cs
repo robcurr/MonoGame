@@ -40,7 +40,13 @@ purpose and non-infringement.
 
 using System;
 
-using OpenTK.Graphics.ES11;
+#if OPENGL
+using OpenTK.Graphics.ES20;
+#endif
+
+#if ANDROID
+using Android.Views;
+#endif
 
 using Microsoft.Xna.Framework.Graphics;
 
@@ -81,10 +87,9 @@ namespace Microsoft.Xna.Framework
 		public void CreateDevice()
 		{
 			_graphicsDevice = new GraphicsDevice();
-			_graphicsDevice.PresentationParameters = new PresentationParameters();
 
 			Initialize();
-			ApplyChanges ();
+			ApplyChanges();
 			
 			OnDeviceCreated(EventArgs.Empty);
 		}
@@ -155,7 +160,10 @@ namespace Microsoft.Xna.Framework
 			// Set "full screen"  as default
 			_graphicsDevice.PresentationParameters.IsFullScreen = true;
 
-			if (_preferMultiSampling) 
+            _graphicsDevice.Initialize();
+
+#if !PSS
+			if (_preferMultiSampling)
 			{
 				_graphicsDevice.PreferedFilter = All.Linear;
 			}
@@ -163,6 +171,7 @@ namespace Microsoft.Xna.Framework
 			{
 				_graphicsDevice.PreferedFilter = All.Nearest;
 			}
+#endif
 		}
 		
         public void ToggleFullScreen()
@@ -192,10 +201,23 @@ namespace Microsoft.Xna.Framework
 				wantFullScreen = value;
 				if (_graphicsDevice != null) 
 				{
-					_graphicsDevice.PresentationParameters.IsFullScreen = value;	
+					_graphicsDevice.PresentationParameters.IsFullScreen = value;
+#if ANDROID
+                    ForceSetFullScreen();
+#endif
 				}
             }
         }
+
+#if ANDROID
+        internal void ForceSetFullScreen()
+        {
+            if (IsFullScreen)
+                Game.Activity.Window.SetFlags(WindowManagerFlags.Fullscreen, WindowManagerFlags.Fullscreen);
+            else
+                Game.Activity.Window.SetFlags(WindowManagerFlags.ForceNotFullscreen, WindowManagerFlags.ForceNotFullscreen);
+        }
+#endif
 
         public bool PreferMultiSampling
         {
@@ -208,6 +230,7 @@ namespace Microsoft.Xna.Framework
 				_preferMultiSampling = value;
 				if ( _graphicsDevice != null )
 				{
+#if !PSS
 					if (_preferMultiSampling) 
 					{
 						_graphicsDevice.PreferedFilter = All.Linear;
@@ -216,6 +239,7 @@ namespace Microsoft.Xna.Framework
 					{
 						_graphicsDevice.PreferedFilter = All.Nearest;
 					}
+#endif
 				}
             }
         }

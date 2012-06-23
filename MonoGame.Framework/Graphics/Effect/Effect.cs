@@ -38,317 +38,451 @@
 // */
 // #endregion License
 // 
-
 using System;
 using System.Collections.Generic;
 using System.Text;
 using System.IO;
-using OpenTK.Graphics.ES20;
 using System.Linq;
+using System.Reflection;
+
+#if PSS
+using Sce.Pss.Core.Graphics;
+#endif
 
 namespace Microsoft.Xna.Framework.Graphics
 {
 	public class Effect : GraphicsResource
     {
-        public EffectParameterCollection Parameters { get; set; }
-        public EffectTechniqueCollection Techniques { get; set; }		
-		
-		internal List<EffectParameter> _textureMappings = new List<EffectParameter>();
+        public EffectParameterCollection Parameters { get; private set; }
 
-		private int fragment_handle;
-        private int vertex_handle;
-        private bool fragment;
-        private bool vertex;
-		
-		internal List<int> vertexShaders = new List<int>();
-		internal List<int> fragmentShaders = new List<int>();
+        public EffectTechniqueCollection Techniques { get; private set; }
 
-		protected Effect(Effect cloneSource) : this(cloneSource.GraphicsDevice)
+        public EffectTechnique CurrentTechnique { get; set; }
+  
+        internal ConstantBuffer[] ConstantBuffers { get; private set; }
+
+        internal Effect(GraphicsDevice graphicsDevice)
 		{
-			this.CurrentTechnique = cloneSource.CurrentTechnique;
-			this.Name = cloneSource.Name;
-			this.Parameters = cloneSource.Parameters;
-			this.Tag = cloneSource.Tag;
-			this.Techniques = cloneSource.Techniques;
+			if (graphicsDevice == null)
+				throw new ArgumentNullException ("Graphics Device Cannot Be Null");
+
+			this.graphicsDevice = graphicsDevice;
 		}
-
-		public Effect(GraphicsDevice aGraphicsDevice, byte[] effectCode): this(aGraphicsDevice)
-		{						
-			int fragmentblocklength = BitConverter.ToInt32(effectCode, 0);
-
-            int vertexblocklength = BitConverter.ToInt32(effectCode, fragmentblocklength + 4);
-
-            if (fragmentblocklength != 0)
-            {
-                fragment_handle = GL.CreateShader( All.FragmentShader );
-                fragment = true;
-            }
-
-            if (vertexblocklength != 0)
-            {
-                vertex_handle = GL.CreateShader( All.VertexShader );
-                vertex = true;
-            }
-
-            if (fragment)
-            {
-                string[] fragmentstring = new string[1] { Encoding.UTF8.GetString(effectCode, 4, fragmentblocklength) };
-                int[] fragmentLength = new int[1] { fragmentstring[0].Length };
-                GL.ShaderSource(fragment_handle, 1, fragmentstring, fragmentLength);
-            }
-
-            if (vertex)
-            {
-                string[] vertexstring = new string[1] { Encoding.UTF8.GetString(effectCode, fragmentblocklength + 8, vertexblocklength) };
-                int[] vertexLength = new int[1] { vertexstring[0].Length };
-                GL.ShaderSource(vertex_handle, 1, vertexstring, vertexLength);
-            }
 			
-			int compiled = 0;
-
-            if (fragment)
-            {
-                GL.CompileShader(fragment_handle);
-				
-				GL.GetShader(fragment_handle, All.CompileStatus, ref compiled );
-				if (compiled == (int)All.False)
-				{
-#if DEBUG					
-					Console.Write("Fragment Compilation Failed!");
-#endif
-				}
-            }
-
-            if (vertex)
-            {
-                GL.CompileShader(vertex_handle);
-				GL.GetShader(vertex_handle, All.CompileStatus, ref compiled );
-				if (compiled == (int)All.False)
-				{
-#if DEBUG					
-					Console.Write("Vertex Compilation Failed!");
-#endif
-				}
-            }
-
+		protected Effect(Effect cloneSource)
+            : this(cloneSource.graphicsDevice)
+		{
+            Clone(cloneSource);
 		}
-		
-		internal Effect(GraphicsDevice aGraphicsDevice)
+
+        public Effect(GraphicsDevice graphicsDevice, byte[] effectCode)
+            : this(graphicsDevice)
         {
-            if (aGraphicsDevice == null)
-            {
-                throw new ArgumentNullException("Graphics Device Cannot Be Null");
-            }
-			this.graphicsDevice = aGraphicsDevice;
-			
-            Parameters = new EffectParameterCollection();
-            Techniques = new EffectTechniqueCollection();
-            CurrentTechnique = new EffectTechnique(this);
-        }
-		
-		internal Effect (GraphicsDevice aGraphicsDevice, string aFileName) : this(aGraphicsDevice)
-		{
-#if ANDROID
-			StreamReader streamReader = new StreamReader(Game.Activity.Assets.Open(aFileName));
-#else			
-			StreamReader streamReader = new StreamReader (aFileName);
-#endif			
-			string text = streamReader.ReadToEnd ();
-			streamReader.Close ();
-			
-			if ( aFileName.ToLower().Contains("fsh") )
-			{
-				CreateFragmentShaderFromSource(text);
-			}
-			else if ( aFileName.ToLower().Contains("vsh") )
-			{
-				CreateVertexShaderFromSource(text);
-			}			
-			else
-			{
-				throw new ArgumentException( aFileName + " not supported!" );
-			}
-			
-			DefineTechnique ("Technique1", "Pass1", 0, 0);
-			CurrentTechnique = Techniques ["Technique1"];
-		}
+            // By default we currently cache all unique byte streams
+            // and use cloning to populate the effect with parameters,
+            // techniques, and passes.
+            //
+            // This means all the immutable types in an effect:
+            //
+            //  - Shaders
+            //  - Annotations
+            //  - Names
+            //  - State Objects
+            //
+            // Are shared for every instance of an effect while the 
+            // parameter values and constant buffers are copied.
+            //
+            // This might need to change slightly if/when we support
+            // shared constant buffers as 'new' should return unique
+            // effects without any shared instance state.
+            
 
-        internal virtual void Apply()
-        {
-     
+            // First look for it in the cache.
+            //
+            // TODO: We could generate a strong and unique signature
+            // offline during content processing and just read it from 
+            // the front of the effectCode instead of computing a fast
+            // hash here at runtime.
+            //
+            var effectKey = ComputeHash(effectCode);
+            Effect cloneSource;
+            if (!EffectCache.TryGetValue(effectKey, out cloneSource))
+            {
+                // Create one.
+                cloneSource = new Effect(graphicsDevice);
+                using (var stream = new MemoryStream(effectCode))
+                using (var reader = new BinaryReader(stream))
+                    cloneSource.ReadEffect(reader);
+
+                // Cache the effect for later in its original unmodified state.
+                EffectCache.Add(effectKey, cloneSource);
+            }
+
+            // Clone it.
+            Clone(cloneSource);
         }
-		
-		protected internal virtual void OnApply ()
-		{
-			
-		}
-		
-		protected void CreateVertexShaderFromSource(string source)
-		{
-			int shader = GL.CreateShader (All.VertexShader);
-			// Attach the loaded source string to the shader object
-			// TODO GL.ShaderSource(shader, source);
-			// Compile the shader
-			GL.CompileShader (shader);
-			
-			vertexShaders.Add(shader);			
-		}
-		
-		
-		protected void CreateFragmentShaderFromSource(string source)
-		{
-			int shader = GL.CreateShader (All.FragmentShader);
-			// Attach the loaded source string to the shader object
-			// TODO GL.ShaderSource (shader, source);
-			// Compile the shader
-			GL.CompileShader (shader);
-			
-			fragmentShaders.Add(shader);			
-		}
-		
-		protected void DefineTechnique (string techniqueName, string passName, int vertexIndex, int fragmentIndex)
-		{
-			EffectTechnique tech = new EffectTechnique(this);
-			tech.Name = techniqueName;
-			EffectPass pass = new EffectPass(tech);
-			pass.Name = passName;
-#if ANDROID			
-			pass.VertexIndex = vertexIndex;
-			pass.FragmentIndex = fragmentIndex;
-			pass.ApplyPass(); 
-#endif			
-			tech.Passes._passes.Add(pass);
-			Techniques._techniques.Add(tech);
-#if ANDROID			
-			LogShaderParameters(String.Format("Technique {0} - Pass {1} :" ,tech.Name ,pass.Name), pass.shaderProgram);
-#endif			
-			
-		}
-		
-		public void Begin()
-		{
-		}
-		
-		public void Begin(SaveStateMode saveStateMode)
-		{
-			
-		}
-		
+
+        /// <summary>
+        /// Clone the source into this existing object.
+        /// </summary>
+        /// <remarks>
+        /// Note this is not overloaded in derived classes on purpose.  This is
+        /// only a reason this exists is for caching effects.
+        /// </remarks>
+        /// <param name="cloneSource">The source effect to clone from.</param>
+        private void Clone(Effect cloneSource)
+        {
+            // Copy the mutable members of the effect.
+            Parameters = new EffectParameterCollection(cloneSource.Parameters);
+            Techniques = new EffectTechniqueCollection(this, cloneSource.Techniques);
+
+            // Make a copy of the immutable constant buffers.
+            ConstantBuffers = new ConstantBuffer[cloneSource.ConstantBuffers.Length];
+            for (var i = 0; i < cloneSource.ConstantBuffers.Length; i++)
+                ConstantBuffers[i] = new ConstantBuffer(cloneSource.ConstantBuffers[i]);
+
+            // Find and set the current technique.
+            for (var i = 0; i < cloneSource.Techniques.Count; i++)
+            {
+                if (cloneSource.Techniques[i] == cloneSource.CurrentTechnique)
+                {
+                    CurrentTechnique = Techniques[i];
+                    break;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Returns a deep copy of the effect where immutable types 
+        /// are shared and mutable data is duplicated.
+        /// </summary>
+        /// <remarks>
+        /// See "Cloning an Effect" in MSDN:
+        /// http://msdn.microsoft.com/en-us/library/windows/desktop/ff476138(v=vs.85).aspx
+        /// </remarks>
+        /// <returns>The cloned effect.</returns>
 		public virtual Effect Clone()
 		{
-			Effect ef = new Effect(this);
-			return ef;
+            return new Effect(this);
 		}
-		
+
 		public void End()
 		{
 		}
-		
-		private static string TryFindAnyCased(string search, string[] arr, params string[] extensions)
+
+        protected internal virtual bool OnApply()
         {
-            return arr.FirstOrDefault(s => extensions.Any(ext => s.ToLower() == (search.ToLower() + ext)));
+            return false;
         }
 
-        private static bool Contains(string search, string[] arr)
+        #region Effect File Reader
+
+        internal static byte[] LoadEffectResource(string name)
         {
-            return arr.Any(s => s == search);
-        }
-		
-		internal static string Normalize(string FileName)
-		{
-#if ANDROID
-			int index = FileName.LastIndexOf(Path.DirectorySeparatorChar);
-            string path = string.Empty;
-            string file = FileName;
-            if (index >= 0)
+#if WINRT
+            var assembly = typeof(Effect).GetTypeInfo().Assembly;
+#else
+            var assembly = typeof(Effect).Assembly;
+#endif
+            var stream = assembly.GetManifestResourceStream(name);
+            using (MemoryStream ms = new MemoryStream())
             {
-                file = FileName.Substring(index + 1, FileName.Length - index - 1);
-                path = FileName.Substring(0, index);
+                stream.CopyTo(ms);
+                return ms.ToArray();
             }
-            string[] files = Game.Activity.Assets.List(path);
+        }
 
-            if (Contains(file, files))
-                return FileName;
-			
-			// Check the file extension
-			if (!string.IsNullOrEmpty(Path.GetExtension(FileName)))
-			{
-				return null;
-			}
-			
-            return Path.Combine(path, TryFindAnyCased(file, files, ".fsh", ".vsh"));
-#else			
-			if (File.Exists(FileName))
-				return FileName;
-			
-			// Check the file extension
-			if (!string.IsNullOrEmpty(Path.GetExtension(FileName)))
-			{
-				return null;
-			}
-			
-			// Concat the file name with valid extensions
-			if (File.Exists(FileName+".fsh"))
-				return FileName+".fsh";
-			if (File.Exists(FileName+".vsh"))
-				return FileName+".vsh";
-			
-			return null;
-#endif			
-		}
-		
-		public EffectTechnique CurrentTechnique 
-		{ 
-			get; set; 
-		}
-		
-		private int GetUniformUserInedx(string uniformName)
-		{
-			int sPos = uniformName.LastIndexOf("_s");
-			int index;
-			
-			// if there's no such construct on the string or it's not followed by numbers only
-			if (sPos == -1 || !int.TryParse(uniformName.Substring(sPos + 2), out index))
-			    return -1; // no user index
-				
-			return index;
-		}
-		
-		// Output the log of an object
-		private void LogShaderParameters (string whichObj, int obj)
-		{
-			int actUnis = 0;
-			Parameters._parameters.Clear();
-			
-			GL.GetProgram (obj, All.ActiveUniforms, ref @actUnis);
+        /// <summary>
+        /// The MonoGame Effect file format header identifier.
+        /// </summary>
+        private const string Header = "MGFX";
 
-			int size;
-			All type = All.BoolVec2;
-			string name = new StringBuilder(100).ToString();
-			int length;
-			
-			for (int x =0; x < actUnis; x++) 
-			{
-				int uniformLocation, userIndex;
-				string uniformName;
-				size = length = 0;
-				
-				GL.GetActiveUniform((uint)obj,(uint)x,100,ref length,ref size, ref type, name);
-				
-				uniformName = name.ToString();
-				
-				userIndex = GetUniformUserInedx(uniformName);
-				
-				uniformLocation = GL.GetUniformLocation(obj, uniformName);
-				
-				EffectParameter efp = new EffectParameter(this, uniformName, x, userIndex, uniformLocation,
-				                                          type.ToString(), length);
-				Parameters._parameters.Add(efp.Name, efp);
-				if (efp.ParameterType == EffectParameterType.Texture2D) {
-					_textureMappings.Add(efp);
-				}
-			}
-			
-		}
+        /// <summary>
+        /// The current MonoGame Effect file format versions
+        /// used to detect old packaged content.
+        /// </summary>
+        /// <remarks>
+        /// We should avoid supporting old versions for very long as
+        /// users should be rebuilding content when packaging their game.
+        /// </remarks>
+        private const int Version = 2;
+
+#if !PSS
+        internal void ReadEffect(BinaryReader reader)
+        {
+            // Check the header to make sure the file and version is correct!
+            var header = new string(reader.ReadChars(Header.Length));
+            var version = (int)reader.ReadByte();
+            if (header != Header || version != Version)
+                throw new Exception("Unsupported MGFX format!");
+
+            var profile = reader.ReadByte();
+#if DIRECTX
+            if (profile != 1)
+#else
+            if (profile != 0)
+#endif
+                throw new Exception("The effect is the profile for this platform!");
+
+            // TODO: Maybe we should be reading in a string 
+            // table here to save some bytes in the file.
+
+            // Read in all the constant buffers.
+            var buffers = (int)reader.ReadByte();
+            ConstantBuffers = new ConstantBuffer[buffers];
+            for (var c = 0; c < buffers; c++)
+            {
+                var buffer = new ConstantBuffer(graphicsDevice, reader);
+                ConstantBuffers[c] = buffer;
+            }
+
+            // Read in all the shader objects.
+            var shaderList = new List<DXShader>();
+            var shaders = (int)reader.ReadByte();
+            for (var s = 0; s < shaders; s++)
+            {
+                var shader = new DXShader(graphicsDevice, reader);
+                shaderList.Add(shader);
+            }
+
+            // Read in the parameters.
+            Parameters = ReadParameters(reader);
+
+            // Read the techniques.
+            Techniques = new EffectTechniqueCollection();
+            var techniques = (int)reader.ReadByte();
+            for (var t = 0; t < techniques; t++)
+            {
+                var name = reader.ReadString();
+
+                var annotations = ReadAnnotations(reader);
+
+                var passes = ReadPasses(reader, this, shaderList);
+
+                var technique = new EffectTechnique(this, name, passes, annotations);
+                Techniques.Add(technique);
+            }
+
+            CurrentTechnique = Techniques[0];
+        }
+
+        private static EffectAnnotationCollection ReadAnnotations(BinaryReader reader)
+        {
+            var collection = new EffectAnnotationCollection();
+
+            var count = (int)reader.ReadByte();
+            if (count == 0)
+                return collection;
+
+            // TODO: Annotations are not implemented!
+
+            return collection;
+        }
+
+        private static EffectPassCollection ReadPasses(BinaryReader reader, Effect effect, List<DXShader> shaders)
+        {
+            var collection = new EffectPassCollection();
+
+            var count = (int)reader.ReadByte();
+
+            for (var i = 0; i < count; i++)
+            {
+                var name = reader.ReadString();
+                var annotations = ReadAnnotations(reader);
+
+                // Get the vertex shader.
+                var shaderIndex = (int)reader.ReadByte();
+                var vertexShader = shaders[shaderIndex];
+
+                // Get the pixel shader.
+                shaderIndex = (int)reader.ReadByte();
+                var pixelShader = shaders[shaderIndex];
+
+                // TODO: Add the state objects to the format!
+
+                var pass = new EffectPass(effect, name, vertexShader, pixelShader, null, null, null, annotations);
+                collection.Add(pass);
+            }
+
+            return collection;
+        }
+
+        private static EffectParameterCollection ReadParameters(BinaryReader reader)
+        {
+            var collection = new EffectParameterCollection();
+            var count = (int)reader.ReadByte();
+            if (count == 0)
+                return collection;
+
+            for (var i = 0; i < count; i++)
+            {
+                var class_ = (EffectParameterClass)reader.ReadByte();
+                var type = (EffectParameterType)reader.ReadByte();
+
+                var name = reader.ReadString();
+                var semantic = reader.ReadString();
+                var annotations = ReadAnnotations(reader);
+
+                var rowCount = (int)reader.ReadByte();
+                var columnCount = (int)reader.ReadByte();
+
+                var elements = ReadParameters(reader);
+                var structMembers = ReadParameters(reader);
+
+                object data = null;
+                if (elements.Count == 0 && structMembers.Count == 0)
+                {
+                    switch (type)
+                    {
+                        case EffectParameterType.Bool:
+                        case EffectParameterType.Int32:
+                            {
+                                var buffer = new int[rowCount * columnCount];
+                                for (var j = 0; j < buffer.Length; j++)
+                                    buffer[j] = reader.ReadInt32();
+                                data = buffer;
+                                break;
+                            }
+
+                        case EffectParameterType.Single:
+                            {
+                                var buffer = new float[rowCount * columnCount];
+                                for (var j = 0; j < buffer.Length; j++)
+                                    buffer[j] = reader.ReadSingle();
+                                data = buffer;
+                                break;
+                            }
+
+                        case EffectParameterType.String:
+                            throw new NotImplementedException();
+                    };
+                }
+
+                var param = new EffectParameter(
+                    class_, type, name, rowCount, columnCount, semantic, 
+                    annotations, elements, structMembers, data);
+
+                collection.Add(param);
+            }
+
+            return collection;
+        }
+#else //PSS
+        internal void ReadEffect(BinaryReader reader)
+        {
+            var effectPass = new EffectPass(this, "Pass", null, null, BlendState.AlphaBlend, DepthStencilState.Default, RasterizerState.CullNone, new EffectAnnotationCollection());
+            effectPass._shaderProgram = new ShaderProgram(reader.ReadBytes((int)reader.BaseStream.Length));
+            var shaderProgram = effectPass._shaderProgram;
+            
+            Parameters = new EffectParameterCollection();
+            for (int i = 0; i < shaderProgram.UniformCount; i++)
+            {
+                Parameters.Add(EffectParameterForUniform(shaderProgram, i));
+            }
+#warning Hacks for BasicEffect as we don't have these parameters yet
+            Parameters.Add (new EffectParameter(
+                EffectParameterClass.Vector, EffectParameterType.Single, "SpecularColor",
+                3, 1, "float3",
+                new EffectAnnotationCollection(), new EffectParameterCollection(), new EffectParameterCollection(), new float[3]));
+            Parameters.Add (new EffectParameter(
+                EffectParameterClass.Scalar, EffectParameterType.Single, "SpecularPower",
+                1, 1, "float",
+                new EffectAnnotationCollection(), new EffectParameterCollection(), new EffectParameterCollection(), 0.0f));
+            Parameters.Add (new EffectParameter(
+                EffectParameterClass.Vector, EffectParameterType.Single, "FogVector",
+                4, 1, "float4",
+                new EffectAnnotationCollection(), new EffectParameterCollection(), new EffectParameterCollection(), new float[4]));
+            Parameters.Add (new EffectParameter(
+                EffectParameterClass.Vector, EffectParameterType.Single, "DiffuseColor",
+                4, 1, "float4",
+                new EffectAnnotationCollection(), new EffectParameterCollection(), new EffectParameterCollection(), new float[4]));
+            
+            Techniques = new EffectTechniqueCollection();
+            var effectPassCollection = new EffectPassCollection();
+            effectPassCollection.Add(effectPass);
+            Techniques.Add(new EffectTechnique(this, "Name", effectPassCollection, new EffectAnnotationCollection()));
+       
+            ConstantBuffers = new ConstantBuffer[0];
+            
+            CurrentTechnique = Techniques[0];
+        }
+        
+        internal EffectParameter EffectParameterForUniform(ShaderProgram shaderProgram, int index)
+        {
+            //var b = shaderProgram.GetUniformBinding(i);
+            var name = shaderProgram.GetUniformName(index);
+            //var s = shaderProgram.GetUniformSize(i);
+            //var x = shaderProgram.GetUniformTexture(i);
+            var type = shaderProgram.GetUniformType(index);
+            
+            //EffectParameter.Semantic => COLOR0 / POSITION0 etc
+   
+            //FIXME: bufferOffset in below lines is 0 but should probably be something else
+            switch (type)
+            {
+            case ShaderUniformType.Float4x4:
+                return new EffectParameter(
+                    EffectParameterClass.Matrix, EffectParameterType.Single, name,
+                    4, 4, "float4x4",
+                    new EffectAnnotationCollection(), new EffectParameterCollection(), new EffectParameterCollection(), new float[4 * 4]);
+            case ShaderUniformType.Float4:
+                return new EffectParameter(
+                    EffectParameterClass.Vector, EffectParameterType.Single, name,
+                    4, 1, "float4",
+                    new EffectAnnotationCollection(), new EffectParameterCollection(), new EffectParameterCollection(), new float[4]);
+            case ShaderUniformType.Sampler2D:
+                return new EffectParameter(
+                    EffectParameterClass.Object, EffectParameterType.Texture2D, name,
+                    1, 1, "texture2d",
+                    new EffectAnnotationCollection(), new EffectParameterCollection(), new EffectParameterCollection(), null);
+            default:
+                throw new Exception("Uniform Type " + type + " Not yet implemented (" + name + ")");
+            }
+        }
+        
+#endif
+        #endregion // Effect File Reader
+
+
+        #region Effect Cache
+
+        // Modified FNV Hash in C#
+        // http://stackoverflow.com/a/468084
+        internal static int ComputeHash(params byte[] data)
+        {
+            unchecked
+            {
+                const int p = 16777619;
+                int hash = (int)2166136261;
+
+                for (int i = 0; i < data.Length; i++)
+                    hash = (hash ^ data[i]) * p;
+
+                hash += hash << 13;
+                hash ^= hash >> 7;
+                hash += hash << 3;
+                hash ^= hash >> 17;
+                hash += hash << 5;
+                return hash;
+            }
+        }
+
+        /// <summary>
+        /// The cache of effects from unique byte streams.
+        /// </summary>
+        private static readonly Dictionary<int, Effect> EffectCache = new Dictionary<int, Effect>();
+
+        internal static void FlushCache()
+        {
+            // Dispose all the cached effects.
+            foreach (var effect in EffectCache)
+                effect.Value.Dispose();
+
+            // Clear the cache.
+            EffectCache.Clear();
+        }
+
+        #endregion // Effect Cache
+
 	}
 }

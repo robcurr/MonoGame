@@ -106,6 +106,8 @@ namespace Microsoft.Xna.Framework
 
             // Create a full-screen window
             _mainWindow = new UIWindow (UIScreen.MainScreen.Bounds);
+			//_mainWindow.AutoresizingMask = UIViewAutoresizing.FlexibleDimensions;
+			
             game.Services.AddService (typeof(UIWindow), _mainWindow);
 
             _viewController = new iOSGameViewController(this);
@@ -159,7 +161,7 @@ namespace Microsoft.Xna.Framework
         {
             base.BeforeInitialize ();
             _viewController.View.MakeCurrent ();
-            TouchPanel.Reset();
+            //TouchPanel.Reset();
 
             // HACK: Because GraphicsDevice doesn't know anything, we need to
             //       tell it the current viewport size.  Once GraphicsDevice is
@@ -191,6 +193,9 @@ namespace Microsoft.Xna.Framework
 
         private void Tick()
         {
+            if (!Game.IsActive)
+                return;
+
             try {
                 if (PerformPendingExit())
                     return;
@@ -249,6 +254,10 @@ namespace Microsoft.Xna.Framework
         {
             if (IsPlayingVideo)
                 return false;
+
+            // Let the touch panel update states.
+            TouchPanel.UpdateState();
+			
             return true;
         }
 
@@ -316,7 +325,7 @@ namespace Microsoft.Xna.Framework
         private void Application_DidBecomeActive(NSNotification notification)
         {
             IsActive = true;
-            TouchPanel.Reset();
+            //TouchPanel.Reset();
         }
 
         private void Application_WillResignActive(NSNotification notification)
@@ -352,11 +361,15 @@ namespace Microsoft.Xna.Framework
 			//        iOSGamePlatform.
 			var gdm = (GraphicsDeviceManager) Game.Services.GetService (typeof (IGraphicsDeviceManager));
 
-			if (gdm != null) {
+			if (gdm != null)
+			{	
 				var presentParams = gdm.GraphicsDevice.PresentationParameters;
 				presentParams.BackBufferWidth = gdm.PreferredBackBufferWidth;
 				presentParams.BackBufferHeight = gdm.PreferredBackBufferHeight;
 				presentParams.DisplayOrientation = orientation;
+
+				// Recalculate our views.
+				ViewController.View.LayoutSubviews();
 			}
 			TouchPanel.DisplayOrientation = orientation;
 		}

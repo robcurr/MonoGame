@@ -86,7 +86,7 @@ namespace Microsoft.Xna.Framework.GamerServices
 					osVersion = parts[0] + "." + parts[1];
 				}
 				
-				if (double.Parse(osVersion) > 4.1)
+				if (double.Parse(osVersion, System.Globalization.CultureInfo.InvariantCulture) > 4.1)
 				{
 					
 					lp = GKLocalPlayer.LocalPlayer;
@@ -270,7 +270,12 @@ namespace Microsoft.Xna.Framework.GamerServices
 		}
 		
 		delegate void AwardAchievementDelegate(string achievementId, double percentageComplete);
-		
+
+        public IAsyncResult BeginAwardAchievement(string achievementId, AsyncCallback callback, Object state)
+        {
+            return BeginAwardAchievement(achievementId, 100.0, callback, state);
+        }
+
 		public IAsyncResult BeginAwardAchievement(
          string achievementId,
 		 double percentageComplete,

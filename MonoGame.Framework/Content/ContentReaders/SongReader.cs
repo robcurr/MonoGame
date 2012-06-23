@@ -42,25 +42,34 @@
 using System;
 using System.IO;
 
-namespace Microsoft.Xna.Framework
+using Microsoft.Xna.Framework.Media;
+
+namespace Microsoft.Xna.Framework.Content
 {
-	internal class SongReader
+	internal class SongReader : ContentTypeReader<Song>
 	{
-		public static string Normalize(string FileName)
+#if ANDROID
+        static string[] supportedExtensions = new string[] { ".mp3", ".ogg", ".mid" };
+#else
+        static string[] supportedExtensions = new string[] { ".mp3" };
+#endif
+
+        internal static string Normalize(string fileName)
 		{
-			if (File.Exists(FileName))
-				return FileName;
+			return Normalize(fileName, supportedExtensions);
+		}
+
+		protected internal override Song Read(ContentReader input, Song existingInstance)
+		{
+			string path = input.ReadString();
 			
-			// Check the file extension
-			if (!string.IsNullOrEmpty(Path.GetExtension(FileName)))
-			{
-				return null;
-			}
+			// Songs don't have the full directory path in their .xnb. Build it.
+			path = Path.Combine (input.ContentManager.RootDirectory, input.ContentManager.CurrentAssetDirectory, path);
+			path = TitleContainer.GetFilename(path);
+
+			/*int durationMS =*/ input.ReadObject<int>();
 			
-			// Concat the file name with valid extensions
-			if (File.Exists(FileName+".mp3"))
-				return FileName+".mp3";
-			return null;
+			return new Song(path); 
 		}
 	}
 }

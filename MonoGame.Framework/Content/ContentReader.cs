@@ -29,6 +29,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+#if WINRT
+using System.Reflection;
+#endif
 
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
@@ -43,6 +46,8 @@ namespace Microsoft.Xna.Framework.Content
         private string assetName;
         private List<KeyValuePair<int, Action<object>>> sharedResourceFixups;
         private ContentTypeReader[] typeReaders;
+		internal int version;
+		internal int sharedResourceCount;
 
         internal ContentTypeReader[] TypeReaders
         {
@@ -60,12 +65,13 @@ namespace Microsoft.Xna.Framework.Content
             }
         }
 
-        internal ContentReader(ContentManager manager, Stream stream, GraphicsDevice graphicsDevice, string assetName)
+        internal ContentReader(ContentManager manager, Stream stream, GraphicsDevice graphicsDevice, string assetName, int version)
             : base(stream)
         {
             this.graphicsDevice = graphicsDevice;
             this.contentManager = manager;
             this.assetName = assetName;
+			this.version = version;
         }
 
         public ContentManager ContentManager
@@ -95,7 +101,7 @@ namespace Microsoft.Xna.Framework.Content
                 r.Initialize(typeReaderManager);
             }
 
-            int sharedResourceCount = Read7BitEncodedInt();
+            sharedResourceCount = Read7BitEncodedInt();
             sharedResourceFixups = new List<KeyValuePair<int, Action<object>>>();
 
             // Read primary object
@@ -140,20 +146,52 @@ namespace Microsoft.Xna.Framework.Content
 
         public T ReadExternalReference<T>()
 		{
-            string externalAssetName = ReadString();
-            if (!String.IsNullOrEmpty(externalAssetName))
+            var externalReference = ReadString();
+			
+            if (!String.IsNullOrEmpty(externalReference))
             {
+#if WINRT
+                var notSeparator = '/';
+                var separator = '\\';
+
+                externalReference = externalReference.Replace(notSeparator, separator);
+
+                var fullAssetName = assetName.Replace(notSeparator, separator);
+                var pathDirectory = Path.GetDirectoryName(fullAssetName);
+                var fullAssetPath = Path.Combine(pathDirectory, externalReference);
+
+                // HACK: This is the only way i can find of normalizing/canonicalizing paths
+                // in WinRT.  We should look for a better method in the upcoming updates.
+                {
+                    var package = Windows.ApplicationModel.Package.Current;
+                    fullAssetPath = Path.Combine(package.InstalledLocation.Path, fullAssetPath);
+                    fullAssetPath = new Uri(fullAssetPath).LocalPath;
+                    fullAssetPath = fullAssetPath.Substring(package.InstalledLocation.Path.Length + 1);
+                }
+
+                return contentManager.Load<T>(fullAssetPath);
+#else
+                externalReference = externalReference.Replace('\\', Path.DirectorySeparatorChar);
+
                 // Use Path.GetFullPath to help resolve relative directories
                 string fullRootPath = Path.GetFullPath(contentManager.RootDirectory);
-                string fullAssetPath = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(Path.Combine(fullRootPath, assetName)), externalAssetName));
+				
+				// iOS won't find the right name if the \'s are facing the wrong way. be certian we're good here.
+				var fullAssetName = Path.Combine(fullRootPath, assetName.Replace('\\', Path.DirectorySeparatorChar)); 
+				var pathDirectory = Path.GetDirectoryName(fullAssetName);
+				var dirExtCombined = Path.Combine(pathDirectory, externalReference);
+				
+                string fullAssetPath = Path.GetFullPath(dirExtCombined);
 
 #if ANDROID
-                externalAssetName = fullAssetPath.Substring(fullRootPath.Length + 3);
+                string externalAssetName = fullAssetPath.Substring(fullRootPath.Length);
 #else				
-                externalAssetName = fullAssetPath.Substring(fullRootPath.Length + 1);
+                string externalAssetName = fullAssetPath.Substring(fullRootPath.Length + 1);
 #endif
                 return contentManager.Load<T>(externalAssetName);
+#endif
             }
+
             return default(T);
         }
         
@@ -206,7 +244,11 @@ namespace Microsoft.Xna.Framework.Content
 
         public T ReadObject<T>(ContentTypeReader typeReader, T existingInstance)
         {
+#if WINRT
+            if (!typeReader.TargetType.GetTypeInfo().IsValueType)
+#else
             if (!typeReader.TargetType.IsValueType)
+#endif
                 return (T)ReadObject<object>();
             return (T)typeReader.Read(this, existingInstance);
         }
@@ -223,7 +265,7 @@ namespace Microsoft.Xna.Framework.Content
 
         public T ReadRawObject<T>()
         {
-            throw new NotImplementedException();
+			return (T)ReadRawObject<T> (default(T));
         }
 
         public T ReadRawObject<T>(ContentTypeReader typeReader)
@@ -304,5 +346,12 @@ namespace Microsoft.Xna.Framework.Content
         {
             return base.Read7BitEncodedInt();
         }
+		
+		internal BoundingSphere ReadBoundingSphere()
+		{
+			var position = ReadVector3();
+            var radius = ReadSingle();
+            return new BoundingSphere(position, radius);
+		}
     }
 }
