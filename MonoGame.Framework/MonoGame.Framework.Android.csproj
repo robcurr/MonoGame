@@ -63,6 +63,7 @@
     <Compile Include="Android\AndroidGamePlatform.cs" />
     <Compile Include="Android\Input\Mouse.cs" />
     <Compile Include="Android\OrientationListener.cs" />
+    <Compile Include="Android\ScreenReciever.cs" />
     <Compile Include="Android\TitleContainer.cs" />
     <Compile Include="Audio\AudioCategory.cs" />
     <Compile Include="Content\ContentManager.cs" />
@@ -220,6 +221,7 @@
     <Compile Include="Input\ButtonState.cs" />
     <Compile Include="Input\GamePadButtons.cs" />
     <Compile Include="Input\GamePadCapabilities.cs" />
+    <Compile Include="Input\GamePadType.cs" />
     <Compile Include="Input\GamePadDPad.cs" />
     <Compile Include="Input\GamePadState.cs" />
     <Compile Include="Input\GamePadThumbSticks.cs" />
